@@ -41,11 +41,11 @@ const FlightResult = ({ delayMinutes, flightDate, flightInfo, scheduledDepTime }
   };
 
   const getDelayCategory = (minutes: number) => {
-    if (minutes < 0) {
+    if (minutes < 10) {
       return { label: "Departing On Time", color: "text-green-600", bgColor: "bg-green-500/10", borderColor: "border-green-500/20" };
-    } else if (minutes >= 0 && minutes < 10) {
+    } else if (minutes >= 10 && minutes < 20) {
       return { label: "Departing A Bit Late", color: "text-yellow-600", bgColor: "bg-yellow-500/10", borderColor: "border-yellow-500/20" };
-    } else if (minutes >= 10 && minutes < 30) {
+    } else if (minutes >= 20 && minutes < 60) {
       return { label: "Departing Late", color: "text-red-500", bgColor: "bg-red-500/10", borderColor: "border-red-500/20" };
     } else {
       return { label: "Departing Very Late", color: "text-red-700", bgColor: "bg-red-600/20", borderColor: "border-red-600/30" };
