@@ -5,7 +5,7 @@
   'use strict';
 
   // Configuration
-  const API_ENDPOINT = 'https://your-api-endpoint.com/predict-delay'; // Replace with your actual API
+  const API_ENDPOINT = 'http://127.0.0.1:5000/api/flight';
   const POLL_INTERVAL = 2000; // Check for new flight cards every 2 seconds
   const PROCESSED_ATTR = 'data-delay-processed';
 
@@ -182,27 +182,35 @@
    */
   async function predictDelay(flightData) {
     try {
-      const params = new URLSearchParams({
-        carrier: flightData.carrier,
-        flightNumber: flightData.flightNumber,
-        flightDate: flightData.flightDate,
+      const payload = {
+        marketing_carrier: flightData.carrier,
+        marketing_flight_number: flightData.flightNumber,
+        flight_date: flightData.flightDate,
         origin: flightData.origin,
         destination: flightData.destination
-      });
+      };
 
-      const response = await fetch(`${API_ENDPOINT}?${params}`, {
-        method: 'GET',
+      console.log('[Flight Delay Predictor] Calling API with:', payload);
+
+      const response = await fetch(API_ENDPOINT, {
+        method: 'POST',
         headers: {
+          'Content-Type': 'application/json',
           'Accept': 'application/json'
-        }
+        },
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('[Flight Delay Predictor] API error response:', errorData);
         throw new Error(`API returned ${response.status}`);
       }
 
       const data = await response.json();
-      // Expected response: { delayMinutes: number }
+      console.log('[Flight Delay Predictor] API response:', data);
+      // Your backend returns feature params; for now just return 0 until model is hooked up
+      // TODO: Once model inference is added, this will return the predicted delay
       return data.delayMinutes || 0;
     } catch (error) {
       console.error('[Flight Delay Predictor] API error:', error);
