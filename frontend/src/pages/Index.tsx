@@ -57,10 +57,19 @@ const Index = () => {
       
       // Convert CRS_DEP_TIME (e.g., 1430) to a proper scheduled departure timestamp
       const crsDepTime = resultData.CRS_DEP_TIME;
+      if (crsDepTime === undefined || crsDepTime === null) {
+        throw new Error('No scheduled departure time returned from server');
+      }
+      
       const hours = Math.floor(crsDepTime / 100);
       const minutes = crsDepTime % 100;
       const scheduledTime = new Date(data.flightDate);
       scheduledTime.setHours(hours, minutes, 0, 0);
+      
+      // Check for valid date
+      if (isNaN(scheduledTime.getTime())) {
+        throw new Error('Invalid flight date or departure time');
+      }
       
       if (resultData.prediction === undefined) {
         throw new Error('No delay prediction returned from server');
