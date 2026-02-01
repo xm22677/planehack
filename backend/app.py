@@ -412,9 +412,10 @@ def flight_lookup():
     prediction = predict_one(model, params, device)
 
     return jsonify({
-        "message": "Flight feature payload received",
-        "prediction": prediction
-    }), 200
+    "message": "Flight feature payload received",
+    "prediction": prediction,
+    "CRS_DEP_TIME": crs_dep_time
+}), 200
     
 
 
