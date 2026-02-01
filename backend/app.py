@@ -19,6 +19,7 @@ json_pth_path = "ft_transformer_weights-2.json"
 
 import numpy as np
 import torch
+from typing import Tuple
 
 CAT_FEATURES = [
     "OP_CARRIER",
@@ -49,6 +50,31 @@ def load_label_encoders(path="label_encoders.json"):
         # build value -> id map
         encoders[col] = {str(v): i for i, v in enumerate(classes)}
     return encoders
+
+def load_y_scaler_from_config_json(json_path: str) -> Tuple[float, float]:
+    """
+    Returns (y_mean, y_scale) for inverse-transform of a StandardScaler:
+      y_real = y_scaled * y_scale + y_mean
+    """
+    with open(json_path, "r") as f:
+        cfg = json.load(f)
+
+    fi = cfg.get("feature_info", {})
+    y_mean = fi["scaler_y_mean"]
+    y_scale = fi["scaler_y_scale"]
+
+    # Handle the case where they were saved as [value] instead of value
+    if isinstance(y_mean, list):
+        y_mean = float(y_mean[0])
+    else:
+        y_mean = float(y_mean)
+
+    if isinstance(y_scale, list):
+        y_scale = float(y_scale[0])
+    else:
+        y_scale = float(y_scale)
+
+    return y_mean, y_scale
 
 
 def encode_cat(col: str, value, card: int) -> int:
@@ -97,6 +123,9 @@ n_airports = len(airport_map)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+Y_CONFIG_JSON = "ft_transformer_weights-2.json"   # whatever your config file is named
+y_mean, y_scale = load_y_scaler_from_config_json(Y_CONFIG_JSON)
+
 model, meta = load_fttransformer_from_config_json_and_pth(
     config_json_path=json_pth_path,
     weights_pth_path=pth_path,
@@ -121,7 +150,8 @@ def encode_label(encoders, col, value):
     # safest choice: map to 0 (first learned class)
     return 0
 
-def predict_one(model, params: dict, device: str):
+
+def predict_one(model, params: dict, device: str, y_mean: float, y_scale: float):
     x_cat_vals = [
         encode_cat(CAT_FEATURES[i], params[CAT_FEATURES[i]], CAT_CARDINALITIES[i])
         for i in range(len(CAT_FEATURES))
@@ -130,12 +160,14 @@ def predict_one(model, params: dict, device: str):
 
     x_cat = torch.tensor([x_cat_vals], dtype=torch.long, device=device)
     x_num = torch.tensor([x_num_vals], dtype=torch.float32, device=device)
-
+    
     model.eval()
     with torch.no_grad():
-        y = model(x_num, x_cat)
-    return float(y.squeeze().cpu().item())
+        y_scaled = model(x_num, x_cat).squeeze()
 
+    # inverse StandardScaler
+    y_real = y_scaled * y_scale + y_mean
+    return float(y_real.detach().cpu().item())
 
 def get_airport_features(iata_code: str) -> dict:
     rec = airport_map.get(iata_code)
@@ -409,7 +441,7 @@ def flight_lookup():
 
     
     # infer delay prediction from model
-    prediction = predict_one(model, params, device)
+    prediction = predict_one(model, params, device, y_mean=y_mean, y_scale=y_scale)
 
     return jsonify({
     "message": "Flight feature payload received",
