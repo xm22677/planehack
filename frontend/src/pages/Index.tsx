@@ -34,37 +34,44 @@ const Index = () => {
     });
 
     try {
-      // TODO: Replace with actual API endpoint
-      const params = new URLSearchParams({
-        marketingCarrier: data.marketingCarrier,
-        flightNumber: data.flightNumber,
-        flightDate: data.flightDate,
-        origin: data.origin,
-        destination: data.destination,
+      const response = await fetch('http://127.0.0.1:5000/api/flight', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          marketing_carrier: data.marketingCarrier,
+          marketing_flight_number: data.flightNumber,
+          flight_date: data.flightDate,
+          origin: data.origin,
+          destination: data.destination,
+        }),
       });
-
-      const response = await fetch(`/api/flight-delay?${params.toString()}`);
       
       if (!response.ok) {
-        throw new Error('Failed to fetch flight data');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch flight data');
       }
 
       const resultData = await response.json();
-      setResult(resultData);
-    } catch (err) {
-      // For demo purposes, simulate a response
-      // Remove this in production and handle the error properly
-      await new Promise(resolve => setTimeout(resolve, 2000));
       
-      // Simulated response
-      const simulatedDelay = Math.floor(Math.random() * 120) - 15; // -15 to 105 minutes
+      // Convert CRS_DEP_TIME (e.g., 1430) to a proper scheduled departure timestamp
+      const crsDepTime = resultData.CRS_DEP_TIME;
+      const hours = Math.floor(crsDepTime / 100);
+      const minutes = crsDepTime % 100;
       const scheduledTime = new Date(data.flightDate);
-      scheduledTime.setHours(14, 30, 0, 0); // Default scheduled time
+      scheduledTime.setHours(hours, minutes, 0, 0);
+      
+      if (resultData.prediction === undefined) {
+        throw new Error('No delay prediction returned from server');
+      }
       
       setResult({
-        delayMinutes: simulatedDelay,
+        delayMinutes: resultData.prediction,
         scheduledDeparture: scheduledTime.toISOString(),
       });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch flight data');
     } finally {
       setIsLoading(false);
     }

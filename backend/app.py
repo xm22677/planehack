@@ -7,48 +7,13 @@ from dotenv import load_dotenv
 import os
 import torch
 
+
 from weights_loader import load_fttransformer_from_config_json_and_pth
+from flask_cors import CORS
 
 load_dotenv()  # reads .env into environment variables
 
 app = Flask(__name__)
-
-pth_path = "aeolus_model_weights-2.pth"
-json_pth_path = "ft_transformer_weights-2.json"
-
-import numpy as np
-import torch
-
-CAT_FEATURES = [
-    "OP_CARRIER",
-    "OP_CARRIER_FL_NUM",
-    "ORIGIN_INDEX",
-    "DEST_INDEX",
-    "CRS_DEP_HOURS",
-    "DAY_OF_MONTH",
-    "DAY_OF_WEEK",
-    "MONTH",
-]
-
-NUM_FEATURES = [
-    "FLIGHTS",
-    "O_TEMP","O_PRCP","O_WSPD",
-    "D_TEMP","D_PRCP","D_WSPD",
-    "O_LATITUDE","O_LONGITUDE",
-    "D_LATITUDE","D_LONGITUDE",
-    "CRS_DEP_MINS",
-]
-
-def load_label_encoders(path="label_encoders.json"):
-    with open(path, "r") as f:
-        raw = json.load(f)
-
-    encoders = {}
-    for col, classes in raw.items():
-        # build value -> id map
-        encoders[col] = {str(v): i for i, v in enumerate(classes)}
-    return encoders
-
 
 def load_airport_map(path: str) -> dict:
     with open(path, "r") as f:
