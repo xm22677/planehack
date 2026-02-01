@@ -10,6 +10,8 @@ import torch
 from weights_loader import load_fttransformer_from_config_json_and_pth
 from flask_cors import CORS
 
+from arrival_loader import arr_load_fttransformer_from_config_json_and_pth
+
 load_dotenv()  # reads .env into environment variables
 
 app = Flask(__name__)
@@ -20,6 +22,35 @@ json_pth_path = "ft_transformer_weights-2.json"
 import numpy as np
 import torch
 from typing import Tuple
+
+from datetime import datetime
+
+def _parse_iso(dt_str: str) -> datetime:
+    """Parse ISO timestamps from AviationStack (handles Z / +00:00)."""
+    return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+
+def _get_time(block: dict) -> str | None:
+    """
+    Return the best available timestamp from a departure/arrival block.
+    Priority: scheduled → estimated → actual
+    """
+    if not isinstance(block, dict):
+        return None
+    for k in ("scheduled", "estimated", "actual"):
+        v = block.get(k)
+        if v:
+            return v
+    return None
+
+def _minutes_between(dep_iso: str, arr_iso: str) -> int:
+    """Compute elapsed minutes, handling day rollovers."""
+    dep = _parse_iso(dep_iso)
+    arr = _parse_iso(arr_iso)
+    minutes = int((arr - dep).total_seconds() // 60)
+    if minutes < 0:
+        minutes += 24 * 60
+    return minutes
+
 
 CAT_FEATURES = [
     "OP_CARRIER",
@@ -41,6 +72,26 @@ NUM_FEATURES = [
     "CRS_DEP_MINS",
 ]
 
+ARR_CAT_FEATURES = [
+    "OP_CARRIER", 
+    "OP_CARRIER_FL_NUM", 
+    "ORIGIN_INDEX", 
+    "DEST_INDEX", 
+    "DAY_OF_MONTH", 
+    "DAY_OF_WEEK", 
+    "MONTH", 
+    "CRS_DEP_HOURS", 
+    "CRS_ARR_HOURS"] 
+
+ARR_NUM_FEATURES = ["FLIGHTS", 
+                    "CRS_ELAPSED_TIME", 
+                    "O_TEMP", "O_PRCP", "O_WSPD", 
+                    "D_TEMP", "D_PRCP", "D_WSPD", 
+                    "O_LATITUDE", "O_LONGITUDE", 
+                    "D_LATITUDE", "D_LONGITUDE", 
+                    "CRS_DEP_MINS", "CRS_ARR_MINS", 
+                    "PRED_DEP_DELAY_OOF"]
+
 def load_label_encoders(path="label_encoders.json"):
     with open(path, "r") as f:
         raw = json.load(f)
@@ -50,6 +101,29 @@ def load_label_encoders(path="label_encoders.json"):
         # build value -> id map
         encoders[col] = {str(v): i for i, v in enumerate(classes)}
     return encoders
+def arr_load_y_scaler_from_config_json(json_path: str) -> Tuple[float, float]:
+    """
+    Returns (y_mean, y_scale) for inverse-transform of a StandardScaler:
+      y_real = y_scaled * y_scale + y_mean
+    """
+    with open(json_path, "r") as f:
+        cfg = json.load(f)
+
+    y_mean = cfg.get("scaler_y_mean", {})
+    y_scale = cfg.get("scaler_y_scale", {})
+
+    # Handle the case where they were saved as [value] instead of value
+    if isinstance(y_mean, list):
+        y_mean = float(y_mean[0])
+    else:
+        y_mean = float(y_mean)
+
+    if isinstance(y_scale, list):
+        y_scale = float(y_scale[0])
+    else:
+        y_scale = float(y_scale)
+
+    return y_mean, y_scale
 
 def load_y_scaler_from_config_json(json_path: str) -> Tuple[float, float]:
     """
@@ -76,6 +150,31 @@ def load_y_scaler_from_config_json(json_path: str) -> Tuple[float, float]:
 
     return y_mean, y_scale
 
+def arr_encode_cat(col: str, value, card: int) -> int:
+    """
+    Training-compatible encoding:
+      - LabelEncoder on str(value) gives 0..n-1
+      - shift by +1 so 0 is reserved for unknown/pad
+      - clamp to [0..card]
+    """
+    s = str(value)
+
+    mapping = ARR_LABEL_ENCODERS.get(col)
+    if mapping is None:
+        # fallback: unknown
+        return 0
+
+    if s in mapping:
+        idx = mapping[s] + 1  # << IMPORTANT +1 shift
+    else:
+        idx = 0  # unknown
+
+    # clamp just in case
+    if idx < 0:
+        return 0
+    if idx > card:
+        return card
+    return idx
 
 def encode_cat(col: str, value, card: int) -> int:
     """
@@ -113,6 +212,9 @@ def load_airport_map(path: str) -> dict:
 LABEL_ENCODERS = load_label_encoders("label_encoders.json")
 CAT_CARDINALITIES = [15, 6854, 271, 300, 31, 7, 11, 24]
 
+ARR_LABEL_ENCODERS = load_label_encoders('arr_label_encoders.json')
+ARR_CAT_CARDINALITIES = [9, 485, 11, 1, 31, 7, 11, 20, 21]
+
 app.config["AIRPORT_MAP"] = load_airport_map("airport_map.json")
 
 AVIATIONSTACK_API_KEY = os.getenv("AVIATIONSTACK_API_KEY", "")
@@ -126,12 +228,24 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 Y_CONFIG_JSON = "ft_transformer_weights-2.json"   # whatever your config file is named
 y_mean, y_scale = load_y_scaler_from_config_json(Y_CONFIG_JSON)
 
+ARR_Y_CONFIG_JSON = "fttransformer_arrival_delay_stacked_preprocess.json"
+arr_y_mean, arr_y_scale = arr_load_y_scaler_from_config_json(ARR_Y_CONFIG_JSON)
+
 model, meta = load_fttransformer_from_config_json_and_pth(
     config_json_path=json_pth_path,
     weights_pth_path=pth_path,
     device=device,
     strict=True,
 )
+
+
+arr_model, arr_meta = arr_load_fttransformer_from_config_json_and_pth(
+    config_json_path='fttransformer_arr_delay_stacked.json',
+    weights_pth_path='Arrrival_model_weights.pth',
+    device=device,
+    strict=True,
+)
+
 
 print("Loaded. Missing:", len(meta["missing_keys"]), "Unexpected:", len(meta["unexpected_keys"]))
 
@@ -157,6 +271,24 @@ def predict_one(model, params: dict, device: str, y_mean: float, y_scale: float)
         for i in range(len(CAT_FEATURES))
     ]
     x_num_vals = [float(params[k]) for k in NUM_FEATURES]
+
+    x_cat = torch.tensor([x_cat_vals], dtype=torch.long, device=device)
+    x_num = torch.tensor([x_num_vals], dtype=torch.float32, device=device)
+
+    model.eval()
+    with torch.no_grad():
+        y_scaled = model(x_num, x_cat).squeeze()
+
+    # inverse StandardScaler
+    y_real = y_scaled * y_scale + y_mean
+    return float(y_real.detach().cpu().item())
+
+def arr_predict_one(model, params: dict, device: str, y_mean: float, y_scale: float):
+    x_cat_vals = [
+        arr_encode_cat(ARR_CAT_FEATURES[i], params[ARR_CAT_FEATURES[i]], ARR_CAT_CARDINALITIES[i])
+        for i in range(len(ARR_CAT_FEATURES))
+    ]
+    x_num_vals = [float(params[k]) for k in ARR_NUM_FEATURES]
 
     x_cat = torch.tensor([x_cat_vals], dtype=torch.long, device=device)
     x_num = torch.tensor([x_num_vals], dtype=torch.float32, device=device)
@@ -318,17 +450,28 @@ def fetch_flight_from_aviationstack(marketing_carrier: str,
 
     # Scheduled departure time often in:
     # flight["departure"]["scheduled"] like "2026-02-01T14:30:00+00:00"
-    dep_scheduled = (flight.get("departure") or {}).get("scheduled")
-    if not dep_scheduled:
-        # fallback: sometimes there are other fields, but keep it simple
-        raise ValueError("Scheduled departure time not found in API response")
+    # Scheduled / estimated / actual times
+    dep_time_iso = _get_time(flight.get("departure"))
+    arr_time_iso = _get_time(flight.get("arrival"))
 
-    crs_dep_time = hhmm_from_iso(dep_scheduled)
+    if not dep_time_iso:
+        raise ValueError("Departure time not found in API response")
+    if not arr_time_iso:
+        raise ValueError("Arrival time not found in API response")
+
+    # HHMM values (for your existing features)
+    crs_dep_time = hhmm_from_iso(dep_time_iso)
+    crs_arr_time = hhmm_from_iso(arr_time_iso)
+
+    # ELAPSED TIME IN MINUTES (correct for ML)
+    crs_elapsed_time = _minutes_between(dep_time_iso, arr_time_iso)
 
     return {
         "OP_CARRIER": op_carrier,
         "OP_CARRIER_FL_NUM": int(op_fl_num) if str(op_fl_num).isdigit() else op_fl_num,
-        "CRS_DEP_TIME": crs_dep_time
+        "CRS_DEP_TIME": crs_dep_time,
+        "CRS_ARR_TIME": crs_arr_time,
+        "CRS_ELAPSED_TIME": crs_elapsed_time
     }
 
 @app.route("/api/flight", methods=["POST"])
@@ -402,6 +545,11 @@ def flight_lookup():
     crs_dep_time = int(inferred["CRS_DEP_TIME"])
     crs_dep_hours, crs_dep_mins = split_hhmm(crs_dep_time)
 
+    crs_arr_time = int(inferred["CRS_ARR_TIME"])
+    crs_arr_hours, crs_arr_mins = split_hhmm(crs_arr_time)
+
+    crs_elapsed_time = int(inferred["CRS_ELAPSED_TIME"])
+
     # set up params for model inference (match your training column names)
     params = {
         "OP_CARRIER": inferred["OP_CARRIER"],
@@ -459,10 +607,70 @@ def flight_lookup():
     # infer delay prediction from model
     prediction = predict_one(model, params, device, y_mean=y_mean, y_scale=y_scale)
 
+    arr_params = {
+        "OP_CARRIER": inferred["OP_CARRIER"],
+        "OP_CARRIER_FL_NUM": inferred["OP_CARRIER_FL_NUM"],
+        "ORIGIN_INDEX": origin_index,
+        "DEST_INDEX": dest_index,
+        "CRS_DEP_HOURS": crs_dep_hours,
+        "CRS_DEP_MINS": crs_dep_mins,
+        "CRS_ARR_HOURS": crs_arr_hours,
+        "CRS_ARR_MINS": crs_arr_mins,
+        "DAY_OF_MONTH": int(dt.day),
+        "DAY_OF_WEEK": int(dt.isoweekday()), 
+        "MONTH": int(dt.month),
+        "FLIGHTS": 1,  # change if better source
+
+        "O_TEMP": float(o_weather["temp"]),
+        "O_PRCP": float(o_weather["prcp"]),
+        "O_WSPD": float(o_weather["wspd"]),
+        "D_TEMP": float(d_weather["temp"]),
+        "D_PRCP": float(d_weather["prcp"]),
+        "D_WSPD": float(d_weather["wspd"]),
+
+        "O_LATITUDE": o_lat,
+        "O_LONGITUDE": o_lon,
+        "D_LATITUDE": d_lat,
+        "D_LONGITUDE": d_lon,
+
+        "CRS_ELAPSED_TIME": crs_elapsed_time,
+        "PRED_DEP_DELAY_OOF": prediction
+    }
+    ARR_FEATURE_ORDER = [
+        "OP_CARRIER",
+        "OP_CARRIER_FL_NUM",
+        "ORIGIN_INDEX",
+        "DEST_INDEX",
+        "CRS_DEP_HOURS",
+        "CRS_ARR_HOURS",
+        "DAY_OF_MONTH",
+        "DAY_OF_WEEK",
+        "MONTH",
+        "FLIGHTS",
+        "O_TEMP",
+        "O_PRCP",
+        "O_WSPD",
+        "D_TEMP",
+        "D_PRCP",
+        "D_WSPD",
+        "O_LATITUDE",
+        "O_LONGITUDE",
+        "D_LATITUDE",
+        "D_LONGITUDE",
+        "CRS_DEP_MINS",
+        "CRS_ARR_MINS",
+        "CRS_ELAPSED_TIME",
+        "PRED_DEP_DELAY_OOF",
+    ]
+    arr_params = {k: arr_params[k] for k in ARR_FEATURE_ORDER}
+    arr_prediction = arr_predict_one(arr_model, arr_params, device, y_mean=arr_y_mean, y_scale=arr_y_scale)
+
     return jsonify({
     "message": "Flight feature payload received",
     "prediction": prediction,
-    "CRS_DEP_TIME": crs_dep_time
+    "CRS_DEP_TIME": crs_dep_time,
+    "arr prediction": arr_prediction,
+    "CRS_ARR_TIME": crs_arr_time
 }), 200
     
 
