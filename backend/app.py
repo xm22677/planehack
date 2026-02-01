@@ -160,7 +160,7 @@ def predict_one(model, params: dict, device: str, y_mean: float, y_scale: float)
 
     x_cat = torch.tensor([x_cat_vals], dtype=torch.long, device=device)
     x_num = torch.tensor([x_num_vals], dtype=torch.float32, device=device)
-    
+
     model.eval()
     with torch.no_grad():
         y_scaled = model(x_num, x_cat).squeeze()
@@ -217,10 +217,26 @@ def fetch_weather(lat: float, lon: float, flight_date: str, crs_dep_time: int) -
         "timezone": "UTC"
     }
 
-    r = requests.get(base_url, params=params, timeout=15)
-    r.raise_for_status()
-    data = r.json()
 
+    try:
+        r = requests.get(base_url, params=params, timeout=15)
+        r.raise_for_status()
+
+    except requests.RequestException:
+        base_url = "https://archive-api.open-meteo.com/v1/archive"
+
+        dep_hour = dep_hour.replace(year=2025)
+        date_str = dep_hour.date().isoformat()
+
+        params.update({
+            "start_date": date_str,
+            "end_date": date_str,
+        })
+
+        r = requests.get(base_url, params=params, timeout=15)
+        r.raise_for_status()
+
+    data = r.json()
     hourly = data.get("hourly", {})
     times = hourly.get("time", [])
 
