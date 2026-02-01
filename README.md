@@ -9,7 +9,7 @@
 > And was developed at **ichack2026** (Jan 31st - Feb 1st)
 
 
-This is an web application and a web browser extension that uses **FT-Transformers** to predict delays in the departure and arrival of the planes. For the details on how this application was developed, take a look at the [devpost](https://devpost.com/software/planehack).
+This is a web application and a web browser extension that uses **FT-Transformers** to predict delays in the departure and arrival of the planes. For the details on how this application was developed, take a look at the [devpost](https://devpost.com/software/planehack).
 
 > [!IMPORTANT]
 > Currently, this application supports and predicts only airplanes & airports within the United States of America.
