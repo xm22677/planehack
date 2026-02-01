@@ -388,23 +388,25 @@ function computeDisplay(depTimeText, predictionMinutes) {
   const delay = Math.round(Number(predictionMinutes));
   if (!isFinite(delay)) return null;
 
-  const absDelay = Math.abs(delay);
   const predictedTimeStr = minutesToHHMM(depMins + delay);
 
-  // < 5 minutes => Accurate (green)
-  if (absDelay < 5) {
+  // NEW RULE: any negative delay => green "Accurate"
+  if (delay < 0) {
     return { html: "Accurate", colorClass: "aeolus-green" };
   }
 
-  // 5..15 => Slight delay (yellow)
-  if (absDelay <= 15) {
+  // delay is 0 or positive:
+  if (delay < 5) {
+    return { html: "Accurate", colorClass: "aeolus-green" };
+  }
+
+  if (delay <= 15) {
     return {
       html: `Slight delay: <span style="font-weight:700;">~${predictedTimeStr}</span>`,
       colorClass: "aeolus-yellow"
     };
   }
 
-  // > 15 => Major delay (red)
   return {
     html: `Major delay: <span style="font-weight:700;">~${predictedTimeStr}</span>`,
     colorClass: "aeolus-red"
