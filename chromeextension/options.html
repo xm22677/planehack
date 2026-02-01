@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Aeolus Predictor Settings</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; padding: 16px; max-width: 680px; }
+      label { display: block; margin-top: 12px; font-weight: 600; }
+      input { width: 100%; padding: 10px; font-size: 14px; }
+      .row { display: flex; gap: 12px; }
+      .row > div { flex: 1; }
+      button { margin-top: 16px; padding: 10px 12px; font-size: 14px; cursor: pointer; }
+      .hint { margin-top: 6px; opacity: 0.8; font-size: 13px; }
+      .status { margin-top: 12px; font-size: 13px; }
+      code { background: #f2f2f2; padding: 2px 6px; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <h2>Aeolus Predictor Settings</h2>
+
+    <label for="backendUrl">Backend base URL</label>
+    <input id="backendUrl" placeholder="http://localhost:5000" />
+    <div class="hint">Your API endpoint will be called at <code>{baseUrl}/api/flight</code>.</div>
+
+    <div class="row">
+      <div>
+        <label for="dateOverride">Flight date override (optional)</label>
+        <input id="dateOverride" placeholder="YYYY-MM-DD (leave blank to auto-detect)" />
+        <div class="hint">If the page date can’t be detected reliably, set it here.</div>
+      </div>
+      <div>
+        <label for="enable">Enable injection</label>
+        <input id="enable" type="checkbox" style="width:auto; transform: scale(1.2); margin-top: 14px;" />
+      </div>
+    </div>
+
+    <button id="save">Save</button>
+    <div id="status" class="status"></div>
+
+    <script src="options.js"></script>
+  </body>
+</html>

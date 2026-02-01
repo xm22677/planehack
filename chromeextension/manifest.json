@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Aeolus Flight Time Predictor",
+  "version": "0.1.0",
+  "description": "Queries a backend per expanded flight card and shows predicted time under the displayed departure time.",
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.google.com/travel/flights*",
+        "https://www.google.com/flights*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html"
+}
