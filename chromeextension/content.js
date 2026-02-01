@@ -1,14 +1,14 @@
 // content.js — Aeolus predictor (Google Flights)
-// - finds likely open cards by anchoring on "Departure time" elements
-// - extracts carrier+flight from DOM (e.g. "DL 2344") to avoid parsing price
-// - extracts origin/dest from (IATA) codes in text
-// - queries backend via background service worker (preferred) or direct fetch (may CORS fail)
-// - injects status line below departure time
-// - supports multiple cards + caching
-// - verbose logging + optional debug panel
+// Key improvements:
+// - calls your API ONLY ONCE per unique flight (per page session)
+// - carrier+flight extracted from DOM token (e.g. "DL 2344"), not price
+// - negative delays are ALWAYS green "Accurate"
+// - injects status below "Departure time" in DOM
+// - supports multiple cards with caching + strong de-dupe
+// - optional debug panel + verbose logs
 
 const STORAGE_DEFAULTS = {
-  backendUrl: "http://localhost:5000",
+  backendUrl: "http://127.0.0.1:5000",
   dateOverride: "",
   enabled: true,
   debug: true,
@@ -19,11 +19,14 @@ const state = {
   settings: { ...STORAGE_DEFAULTS },
   // cacheKey -> { status: "ok"|"pending"|"error", html, colorClass, predictionMinutes, ts }
   cache: new Map(),
-  // depEl -> injected line
+  // depEl -> injected line element
   injectedByDepEl: new WeakMap(),
   panelEl: null,
   stylesInjected: false
 };
+
+// HARD de-dupe: only query once per unique key during the lifetime of the page.
+const seenKeys = new Set();
 
 const LOG_PREFIX = "[AEOLUS]";
 function log(...args) {
@@ -49,7 +52,7 @@ function ensureStylesInjected() {
   style.textContent = `
     .aeolus-prediction {
       margin-top: 4px;
-      font-size: 14px;
+      font-size: 14px; /* bigger */
       line-height: 1.25;
       font-weight: 600;
     }
@@ -131,7 +134,7 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function debounce(fn, wait = 250) {
+function debounce(fn, wait = 1200) {
   let t = null;
   return (...args) => {
     clearTimeout(t);
@@ -163,8 +166,8 @@ function extractIataCodesFromText(text) {
 
 function looksLikeCarrierFlight(s) {
   // Must look like "DL 2344" or "DL2344"
-  // Carrier: 2–3 alnum but must contain at least one letter
-  // Flight number: 2–5 digits (avoid matching "0")
+  // Carrier must include at least one letter (avoid "29 0" / prices / times)
+  // Flight number 2–5 digits (avoid "0")
   const t = normalizeSpaces(s).toUpperCase();
   const m = t.match(/^([A-Z0-9]{2,3})\s*(\d{2,5})$/);
   if (!m) return null;
@@ -173,17 +176,16 @@ function looksLikeCarrierFlight(s) {
   const flightNo = m[2];
 
   if (!/[A-Z]/.test(carrier)) return null;
-
   return { marketing_carrier: carrier, marketing_flight_number: flightNo };
 }
 
 function extractCarrierAndFlightNumberFromDom(root) {
-  // Google Flights often has the marketing flight token in a <span>, e.g. "DL 2344"
+  // Google Flights often has the token in a <span>, e.g. "DL 2344"
   const nodes = root.querySelectorAll("span, div");
   for (const n of nodes) {
     const txt = normalizeSpaces(n.textContent);
     if (!txt) continue;
-    if (txt.length > 12) continue; // keep only small tokens
+    if (txt.length > 12) continue; // keep tiny tokens only
     const parsed = looksLikeCarrierFlight(txt);
     if (parsed) return parsed;
   }
@@ -226,7 +228,7 @@ function minutesToHHMM(mins) {
 }
 
 function detectFlightDateFromPage() {
-  // Best-effort. If this fails, use settings.dateOverride.
+  // Best-effort. Use settings.dateOverride if this fails.
   const labels = Array.from(document.querySelectorAll("[aria-label]"))
     .map((el) => el.getAttribute("aria-label"))
     .filter(Boolean);
@@ -303,21 +305,11 @@ function buildFlightArgsFromCard(root, flightDate) {
   log("Carrier/flight parsed:", cf);
   panelWrite(`Carrier/flight parsed: ${cf ? cf.marketing_carrier + " " + cf.marketing_flight_number : "null"}`);
 
-  if (!cf) {
-    // diagnostics
-    const sample = Array.from(root.querySelectorAll("span"))
-      .map((s) => normalizeSpaces(s.textContent))
-      .filter(Boolean)
-      .filter((s) => s.length <= 14)
-      .slice(0, 30);
-    log("Span text samples (<=14 chars):", sample);
-    return { error: "Could not parse carrier/flight number", debugText: text };
-  }
+  if (!cf) return { error: "Could not parse carrier/flight number", debugText: text };
 
   const iatas = extractIataCodesFromText(text);
   if (iatas.length < 2) return { error: "Could not parse origin/destination IATA", debugText: text };
 
-  // first + last avoids intermediate stop airports
   const origin = iatas[0];
   const destination = iatas[iatas.length - 1];
 
@@ -379,7 +371,12 @@ function setResult(line, html, colorClass) {
   line.innerHTML = html;
 }
 
-// ===== Display logic (your thresholds) =====
+// ===== Display logic =====
+// Rules:
+// - if delay < 0 => green Accurate
+// - else if delay < 5 => green Accurate
+// - else if 5..15 => yellow "Slight delay: ~time"
+// - else => red "Major delay: ~time"
 
 function computeDisplay(depTimeText, predictionMinutes) {
   const depMins = parseTimeToMinutesSinceMidnight(depTimeText);
@@ -390,23 +387,18 @@ function computeDisplay(depTimeText, predictionMinutes) {
 
   const predictedTimeStr = minutesToHHMM(depMins + delay);
 
-  // NEW RULE: any negative delay => green "Accurate"
   if (delay < 0) {
     return { html: "Accurate", colorClass: "aeolus-green" };
   }
-
-  // delay is 0 or positive:
   if (delay < 5) {
     return { html: "Accurate", colorClass: "aeolus-green" };
   }
-
   if (delay <= 15) {
     return {
       html: `Slight delay: <span style="font-weight:700;">~${predictedTimeStr}</span>`,
       colorClass: "aeolus-yellow"
     };
   }
-
   return {
     html: `Major delay: <span style="font-weight:700;">~${predictedTimeStr}</span>`,
     colorClass: "aeolus-red"
@@ -415,7 +407,7 @@ function computeDisplay(depTimeText, predictionMinutes) {
 
 // ===== Backend call =====
 
-// Preferred: via background service worker (avoids CORS if manifest host_permissions is set)
+// Preferred: via background service worker (avoids CORS if host_permissions is set)
 function callBackgroundPredict(args) {
   return new Promise((resolve, reject) => {
     if (!chrome?.runtime?.sendMessage) {
@@ -442,7 +434,7 @@ function callBackgroundPredict(args) {
   });
 }
 
-// Fallback: direct fetch (will often hit CORS if backend doesn't allow it)
+// Fallback: direct fetch (will CORS fail if backend doesn't allow it)
 async function directFetchPredict(args) {
   const base = normalizeBaseUrl(state.settings.backendUrl);
   const url = `${base}/api/flight`;
@@ -463,13 +455,17 @@ async function directFetchPredict(args) {
   return data;
 }
 
+function getHandledKey(depEl) {
+  return depEl?.dataset?.aeolusKey || null;
+}
+function markHandled(depEl, key) {
+  if (!depEl || !key) return;
+  depEl.dataset.aeolusKey = key;
+}
+
 async function processCard(root, flightDate) {
-  // Use first Departure time element inside root
   const depEl = findDepartureTimeEls(root)[0];
   const depTimeText = getTimeText(depEl);
-
-  log("processCard depTime:", depTimeText, "date:", flightDate);
-  panelWrite(`processCard dep=${depTimeText || "?"} date=${flightDate || "?"}`);
 
   if (!depEl || !depTimeText) return;
 
@@ -477,67 +473,79 @@ async function processCard(root, flightDate) {
 
   const args = buildFlightArgsFromCard(root, flightDate);
   if (args.error) {
-    warn("Args build failed:", args.error);
-    panelWrite(`Args failed: ${args.error}`);
     setError(line, args.error);
     return;
   }
 
   const key = makeCacheKey(args);
-  const cached = state.cache.get(key);
 
-  if (cached?.status === "ok") {
-    log("Cache hit:", key, cached);
-    panelWrite(`Cache hit: ${key}`);
-    setResult(line, cached.html, cached.colorClass);
+  // If this exact element was already associated with this key, just re-render from cache.
+  const existingKey = getHandledKey(depEl);
+  if (existingKey === key) {
+    const cached = state.cache.get(key);
+    if (cached?.status === "ok") setResult(line, cached.html, cached.colorClass);
+    else if (cached?.status === "pending") setLoading(line);
     return;
   }
 
+  // Mark element immediately so repeated scans don't requeue it.
+  markHandled(depEl, key);
+
+  // HARD DE-DUPE: if we've already attempted this key once, do NOT request again.
+  if (seenKeys.has(key)) {
+    const cached = state.cache.get(key);
+    if (cached?.status === "ok") setResult(line, cached.html, cached.colorClass);
+    else if (cached?.status === "pending") setLoading(line);
+    else setError(line, "already checked");
+    return;
+  }
+
+  // If we already have cached OK, render it and mark as seen (optional but consistent).
+  const cached = state.cache.get(key);
+  if (cached?.status === "ok") {
+    seenKeys.add(key);
+    setResult(line, cached.html, cached.colorClass);
+    return;
+  }
   if (cached?.status === "pending") {
     setLoading(line);
     return;
   }
 
+  // First time for this key => allow exactly one request.
+  seenKeys.add(key);
   state.cache.set(key, { status: "pending", ts: Date.now() });
   setLoading(line);
 
   try {
-    log("Requesting prediction for:", key, args);
-    panelWrite(`Requesting: ${key}`);
-
     let resp;
     try {
       resp = await callBackgroundPredict(args);
     } catch (bgErr) {
       warn("Background predict failed, trying direct fetch:", bgErr.message);
-      panelWrite(`BG failed: ${bgErr.message} (trying direct)`);
-      resp = await directFetchPredict(args);
+      resp = await directFetchPredict(args); // may CORS fail
     }
 
     const predictionMinutes = resp?.prediction;
-    log("Backend prediction minutes:", predictionMinutes);
-    panelWrite(`Prediction minutes: ${predictionMinutes}`);
-
     const computed = computeDisplay(depTimeText, predictionMinutes);
+
     if (!computed) {
       state.cache.set(key, { status: "error", ts: Date.now() });
       setError(line, "bad time/prediction");
       return;
     }
 
-    const cacheVal = {
+    state.cache.set(key, {
       status: "ok",
       predictionMinutes,
       html: computed.html,
       colorClass: computed.colorClass,
       ts: Date.now()
-    };
+    });
 
-    state.cache.set(key, cacheVal);
     setResult(line, computed.html, computed.colorClass);
   } catch (e) {
-    error("Prediction failed:", e);
-    panelWrite(`Prediction failed: ${e.message}`);
+    // IMPORTANT: keep seenKeys so we don't retry/spam on failure.
     state.cache.set(key, { status: "error", ts: Date.now() });
     setError(line, e.message || "request failed");
   }
@@ -548,36 +556,29 @@ async function processCard(root, flightDate) {
 async function loadSettings() {
   const stored = await chrome.storage.sync.get(STORAGE_DEFAULTS);
   state.settings = { ...STORAGE_DEFAULTS, ...stored };
-  log("Settings loaded:", state.settings);
-  panelWrite(`Settings: ${JSON.stringify(state.settings)}`);
   ensureStylesInjected();
   panelEnsure();
+  log("Settings loaded:", state.settings);
+  panelWrite(`Settings: ${JSON.stringify(state.settings)}`);
 }
 
 const scan = debounce(async () => {
-  if (!state.settings.enabled) {
-    log("Scan skipped: disabled");
-    return;
-  }
+  if (!state.settings.enabled) return;
 
   const pageDate = state.settings.dateOverride?.trim() || detectFlightDateFromPage();
-  log("Scan start. pageDate:", pageDate);
-  panelWrite(`Scan start. date=${pageDate || "?"}`);
-
   const roots = findOpenCardRoots();
+
   for (const root of roots) {
     processCard(root, pageDate);
     await sleep(25);
   }
-}, 250);
+}, 1200); // slower scan to reduce churn
 
 async function init() {
   await loadSettings();
 
   chrome.storage.onChanged.addListener(async (changes, area) => {
     if (area !== "sync") return;
-    log("Storage changed:", changes);
-    panelWrite("Storage changed");
     await loadSettings();
     scan();
   });
@@ -585,8 +586,6 @@ async function init() {
   const observer = new MutationObserver(() => scan());
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
-  log("Observer installed; initial scan");
-  panelWrite("Observer installed; initial scan");
   scan();
 }
 
