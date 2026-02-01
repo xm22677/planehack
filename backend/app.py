@@ -50,6 +50,33 @@ def load_label_encoders(path="label_encoders.json"):
         encoders[col] = {str(v): i for i, v in enumerate(classes)}
     return encoders
 
+
+def encode_cat(col: str, value, card: int) -> int:
+    """
+    Training-compatible encoding:
+      - LabelEncoder on str(value) gives 0..n-1
+      - shift by +1 so 0 is reserved for unknown/pad
+      - clamp to [0..card]
+    """
+    s = str(value)
+
+    mapping = LABEL_ENCODERS.get(col)
+    if mapping is None:
+        # fallback: unknown
+        return 0
+
+    if s in mapping:
+        idx = mapping[s] + 1  # << IMPORTANT +1 shift
+    else:
+        idx = 0  # unknown
+
+    # clamp just in case
+    if idx < 0:
+        return 0
+    if idx > card:
+        return card
+    return idx
+
 CORS(app)
 
 
@@ -58,6 +85,7 @@ def load_airport_map(path: str) -> dict:
         return json.load(f)
     
 LABEL_ENCODERS = load_label_encoders("label_encoders.json")
+CAT_CARDINALITIES = [15, 6854, 271, 300, 31, 7, 11, 24]
 
 app.config["AIRPORT_MAP"] = load_airport_map("airport_map.json")
 
@@ -93,23 +121,19 @@ def encode_label(encoders, col, value):
     # safest choice: map to 0 (first learned class)
     return 0
 
-def predict_one(model, params, device):
-    x_cat = torch.tensor(
-        [[encode_label(LABEL_ENCODERS, c, params[c]) for c in CAT_FEATURES]],
-        dtype=torch.long,
-        device=device
-    )
+def predict_one(model, params: dict, device: str):
+    x_cat_vals = [
+        encode_cat(CAT_FEATURES[i], params[CAT_FEATURES[i]], CAT_CARDINALITIES[i])
+        for i in range(len(CAT_FEATURES))
+    ]
+    x_num_vals = [float(params[k]) for k in NUM_FEATURES]
 
-    x_num = torch.tensor(
-        [[float(params[c]) for c in NUM_FEATURES]],
-        dtype=torch.float32,
-        device=device
-    )
+    x_cat = torch.tensor([x_cat_vals], dtype=torch.long, device=device)
+    x_num = torch.tensor([x_num_vals], dtype=torch.float32, device=device)
 
     model.eval()
     with torch.no_grad():
         y = model(x_num, x_cat)
-
     return float(y.squeeze().cpu().item())
 
 
