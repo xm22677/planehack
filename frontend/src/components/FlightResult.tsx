@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle, Plane, Calendar, Clock } from "lucide-react";
+import { AlertTriangle, CheckCircle, Plane, Calendar, Clock, PlaneLanding, PlaneTakeoff } from "lucide-react";
 
 interface FlightResultProps {
   delayMinutes: number;
@@ -10,9 +10,18 @@ interface FlightResultProps {
     destination: string;
   };
   scheduledDepTime: number;
+  arrDelayMinutes: number;
+  scheduledArrTime: number;
 }
 
-const FlightResult = ({ delayMinutes, flightDate, flightInfo, scheduledDepTime }: FlightResultProps) => {
+const FlightResult = ({ 
+  delayMinutes, 
+  flightDate, 
+  flightInfo, 
+  scheduledDepTime,
+  arrDelayMinutes,
+  scheduledArrTime 
+}: FlightResultProps) => {
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
     return date.toLocaleDateString('en-US', {
@@ -40,21 +49,36 @@ const FlightResult = ({ delayMinutes, flightDate, flightInfo, scheduledDepTime }
     return newHours * 100 + newMinutes;
   };
 
-  const getDelayCategory = (minutes: number) => {
-    if (minutes < 0) {
+  const getDepDelayCategory = (minutes: number) => {
+    if (minutes < 10) {
       return { label: "Departing On Time", color: "text-green-600", bgColor: "bg-green-500/10", borderColor: "border-green-500/20" };
-    } else if (minutes >= 0 && minutes < 10) {
+    } else if (minutes >= 10 && minutes < 20) {
       return { label: "Departing A Bit Late", color: "text-yellow-600", bgColor: "bg-yellow-500/10", borderColor: "border-yellow-500/20" };
-    } else if (minutes >= 10 && minutes < 30) {
+    } else if (minutes >= 20 && minutes < 60) {
       return { label: "Departing Late", color: "text-red-500", bgColor: "bg-red-500/10", borderColor: "border-red-500/20" };
     } else {
       return { label: "Departing Very Late", color: "text-red-700", bgColor: "bg-red-600/20", borderColor: "border-red-600/30" };
     }
   };
 
-  const isEarly = delayMinutes < 0;
-  const category = getDelayCategory(delayMinutes);
-  const actualTime = calculateActualTime(scheduledDepTime, delayMinutes);
+  const getArrDelayCategory = (minutes: number) => {
+    if (minutes < 20) {
+      return { label: "Arriving On Time", color: "text-green-600", bgColor: "bg-green-500/10", borderColor: "border-green-500/20" };
+    } else if (minutes >= 20 && minutes < 40) {
+      return { label: "Arriving A Bit Late", color: "text-yellow-600", bgColor: "bg-yellow-500/10", borderColor: "border-yellow-500/20" };
+    } else if (minutes >= 40 && minutes < 120) {
+      return { label: "Arriving Late", color: "text-red-500", bgColor: "bg-red-500/10", borderColor: "border-red-500/20" };
+    } else {
+      return { label: "Arriving Very Late", color: "text-red-700", bgColor: "bg-red-600/20", borderColor: "border-red-600/30" };
+    }
+  };
+
+  const depIsEarly = delayMinutes < 0;
+  const arrIsEarly = arrDelayMinutes < 0;
+  const depCategory = getDepDelayCategory(delayMinutes);
+  const arrCategory = getArrDelayCategory(arrDelayMinutes);
+  const actualDepTime = calculateActualTime(scheduledDepTime, delayMinutes);
+  const actualArrTime = calculateActualTime(scheduledArrTime, arrDelayMinutes);
 
   return (
     <div className="animate-fade-up space-y-6">
@@ -81,42 +105,92 @@ const FlightResult = ({ delayMinutes, flightDate, flightInfo, scheduledDepTime }
         </p>
       </div>
 
-      {/* Delay Status Card */}
-      <div className={`rounded-2xl p-8 text-center ${
-        isEarly 
-          ? 'bg-green-500/10 border border-green-500/20'
-          : `${category.bgColor} border ${category.borderColor}`
-      }`}>
-        <div className="flex items-center justify-center gap-3 mb-4">
-          {isEarly || delayMinutes < 10 ? (
-            <CheckCircle className="w-8 h-8 text-green-500" />
-          ) : (
-            <AlertTriangle className={`w-8 h-8 ${category.color}`} />
-          )}
-        </div>
-        
-        <div className={`text-3xl font-bold ${
-          isEarly ? 'text-green-600' : category.color
-        }`}>
-          {isEarly ? 'Departing On Time' : category.label}
-        </div>
-      </div>
+      {/* Two boxes side by side: Departure and Arrival */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
+        {/* Departure Box */}
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-center gap-2 text-muted-foreground h-6">
+            <PlaneTakeoff className="w-5 h-5" />
+            <span className="text-sm font-medium uppercase tracking-wide">Departure</span>
+          </div>
+          
+          {/* Departure Status Card */}
+          <div className={`rounded-2xl p-6 text-center flex-1 flex flex-col items-center justify-center ${
+            depIsEarly 
+              ? 'bg-green-500/10 border border-green-500/20'
+              : `${depCategory.bgColor} border ${depCategory.borderColor}`
+          }`}>
+            <div className="flex items-center justify-center gap-2 mb-3">
+              {depIsEarly || delayMinutes < 10 ? (
+                <CheckCircle className="w-6 h-6 text-green-500" />
+              ) : (
+                <AlertTriangle className={`w-6 h-6 ${depCategory.color}`} />
+              )}
+            </div>
+            
+            <div className={`text-xl font-bold ${
+              depIsEarly ? 'text-green-600' : depCategory.color
+            }`}>
+              {depIsEarly ? 'Departing On Time' : depCategory.label}
+            </div>
+          </div>
 
-      {/* Time Info */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="bg-secondary/50 rounded-xl p-4 text-center">
-          <Clock className="w-5 h-5 text-muted-foreground mx-auto mb-2" />
-          <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Scheduled</p>
-          <p className="text-lg font-semibold text-foreground">{formatTime(scheduledDepTime)}</p>
+          {/* Departure Scheduled Time */}
+          <div className="bg-white rounded-xl p-4 text-center border border-border/30 h-[76px] flex flex-col items-center justify-center">
+            <Clock className="w-4 h-4 text-muted-foreground mb-1" />
+            <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Scheduled</p>
+            <p className="text-base font-semibold text-foreground">{formatTime(scheduledDepTime)}</p>
+          </div>
+
+          {/* Departure Actual Time */}
+          <div className="bg-white rounded-xl p-4 text-center border border-border/30 h-[76px] flex flex-col items-center justify-center">
+            <Clock className={`w-4 h-4 mb-1 ${depIsEarly ? 'text-green-600' : depCategory.color}`} />
+            <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Actual</p>
+            <p className={`text-base font-semibold ${depIsEarly ? 'text-green-600' : depCategory.color}`}>~{formatTime(actualDepTime)}</p>
+          </div>
         </div>
-        <div className={`rounded-xl p-4 text-center ${
-          isEarly 
-            ? 'bg-green-500/10 border border-green-500/20'
-            : `${category.bgColor} border ${category.borderColor}`
-        }`}>
-          <Clock className={`w-5 h-5 mx-auto mb-2 ${isEarly ? 'text-green-600' : category.color}`} />
-          <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Actual</p>
-          <p className={`text-lg font-semibold ${isEarly ? 'text-green-600' : category.color}`}>~{formatTime(actualTime)}</p>
+
+        {/* Arrival Box */}
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-center gap-2 text-muted-foreground h-6">
+            <PlaneLanding className="w-5 h-5" />
+            <span className="text-sm font-medium uppercase tracking-wide">Arrival</span>
+          </div>
+          
+          {/* Arrival Status Card */}
+          <div className={`rounded-2xl p-6 text-center flex-1 flex flex-col items-center justify-center ${
+            arrIsEarly 
+              ? 'bg-green-500/10 border border-green-500/20'
+              : `${arrCategory.bgColor} border ${arrCategory.borderColor}`
+          }`}>
+            <div className="flex items-center justify-center gap-2 mb-3">
+              {arrIsEarly || arrDelayMinutes < 20 ? (
+                <CheckCircle className="w-6 h-6 text-green-500" />
+              ) : (
+                <AlertTriangle className={`w-6 h-6 ${arrCategory.color}`} />
+              )}
+            </div>
+            
+            <div className={`text-xl font-bold ${
+              arrIsEarly ? 'text-green-600' : arrCategory.color
+            }`}>
+              {arrIsEarly ? 'Arriving On Time' : arrCategory.label}
+            </div>
+          </div>
+
+          {/* Arrival Scheduled Time */}
+          <div className="bg-white rounded-xl p-4 text-center border border-border/30 h-[76px] flex flex-col items-center justify-center">
+            <Clock className="w-4 h-4 text-muted-foreground mb-1" />
+            <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Scheduled</p>
+            <p className="text-base font-semibold text-foreground">{formatTime(scheduledArrTime)}</p>
+          </div>
+
+          {/* Arrival Actual Time */}
+          <div className="bg-white rounded-xl p-4 text-center border border-border/30 h-[76px] flex flex-col items-center justify-center">
+            <Clock className={`w-4 h-4 mb-1 ${arrIsEarly ? 'text-green-600' : arrCategory.color}`} />
+            <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Actual</p>
+            <p className={`text-base font-semibold ${arrIsEarly ? 'text-green-600' : arrCategory.color}`}>~{formatTime(actualArrTime)}</p>
+          </div>
         </div>
       </div>
 

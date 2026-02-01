@@ -9,6 +9,8 @@ interface FlightResultData {
   delayMinutes: number;
   flightDate: string;
   scheduledDepTime: number;
+  arrDelayMinutes: number;
+  scheduledArrTime: number;
 }
 
 const Index = () => {
@@ -64,6 +66,8 @@ const Index = () => {
         delayMinutes: Math.round(resultData.prediction),
         flightDate: data.flightDate,
         scheduledDepTime: resultData.CRS_DEP_TIME,
+        arrDelayMinutes: Math.round(resultData['arr prediction']),
+        scheduledArrTime: resultData.CRS_ARR_TIME,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch flight data');
@@ -113,6 +117,8 @@ const Index = () => {
                 flightDate={result.flightDate}
                 flightInfo={flightInfo}
                 scheduledDepTime={result.scheduledDepTime}
+                arrDelayMinutes={result.arrDelayMinutes}
+                scheduledArrTime={result.scheduledArrTime}
               />
             </div>
           )}
