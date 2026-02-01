@@ -5,10 +5,13 @@ import requests
 import json
 from dotenv import load_dotenv
 import os
+from flask_cors import CORS
 
 load_dotenv()  # reads .env into environment variables
 
 app = Flask(__name__)
+CORS(app)
+
 
 def load_airport_map(path: str) -> dict:
     with open(path, "r") as f:
