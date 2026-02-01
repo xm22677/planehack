@@ -5,21 +5,110 @@ import requests
 import json
 from dotenv import load_dotenv
 import os
+import torch
+
+from weights_loader import load_fttransformer_from_config_json_and_pth
 
 load_dotenv()  # reads .env into environment variables
 
 app = Flask(__name__)
 
+pth_path = "aeolus_model_weights-2.pth"
+json_pth_path = "ft_transformer_weights-2.json"
+
+import numpy as np
+import torch
+
+CAT_FEATURES = [
+    "OP_CARRIER",
+    "OP_CARRIER_FL_NUM",
+    "ORIGIN_INDEX",
+    "DEST_INDEX",
+    "CRS_DEP_HOURS",
+    "DAY_OF_MONTH",
+    "DAY_OF_WEEK",
+    "MONTH",
+]
+
+NUM_FEATURES = [
+    "FLIGHTS",
+    "O_TEMP","O_PRCP","O_WSPD",
+    "D_TEMP","D_PRCP","D_WSPD",
+    "O_LATITUDE","O_LONGITUDE",
+    "D_LATITUDE","D_LONGITUDE",
+    "CRS_DEP_MINS",
+]
+
+def load_label_encoders(path="label_encoders.json"):
+    with open(path, "r") as f:
+        raw = json.load(f)
+
+    encoders = {}
+    for col, classes in raw.items():
+        # build value -> id map
+        encoders[col] = {str(v): i for i, v in enumerate(classes)}
+    return encoders
+
+
 def load_airport_map(path: str) -> dict:
     with open(path, "r") as f:
         return json.load(f)
     
+LABEL_ENCODERS = load_label_encoders("label_encoders.json")
+
 app.config["AIRPORT_MAP"] = load_airport_map("airport_map.json")
 
 AVIATIONSTACK_API_KEY = os.getenv("AVIATIONSTACK_API_KEY", "")
 AVIATIONSTACK_BASE_URL = "http://api.aviationstack.com/v1/flights"
 
 airport_map = app.config.get("AIRPORT_MAP", {})  # recommended: set at startup
+n_airports = len(airport_map)
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+model, meta = load_fttransformer_from_config_json_and_pth(
+    config_json_path=json_pth_path,
+    weights_pth_path=pth_path,
+    device=device,
+    strict=True,
+)
+
+print("Loaded. Missing:", len(meta["missing_keys"]), "Unexpected:", len(meta["unexpected_keys"]))
+
+def encode_label(encoders, col, value):
+    """
+    Exact match to LabelEncoder.fit_transform(data[col].astype(str))
+    with safe handling of unseen values.
+    """
+    s = str(value)
+    enc = encoders[col]
+
+    if s in enc:
+        return enc[s]
+
+    # unseen category → map to most frequent / fallback
+    # safest choice: map to 0 (first learned class)
+    return 0
+
+def predict_one(model, params, device):
+    x_cat = torch.tensor(
+        [[encode_label(LABEL_ENCODERS, c, params[c]) for c in CAT_FEATURES]],
+        dtype=torch.long,
+        device=device
+    )
+
+    x_num = torch.tensor(
+        [[float(params[c]) for c in NUM_FEATURES]],
+        dtype=torch.float32,
+        device=device
+    )
+
+    model.eval()
+    with torch.no_grad():
+        y = model(x_num, x_cat)
+
+    return float(y.squeeze().cpu().item())
+
 
 def get_airport_features(iata_code: str) -> dict:
     rec = airport_map.get(iata_code)
@@ -97,6 +186,12 @@ def hhmm_from_iso(dt_str: str) -> int:
     # datetime.fromisoformat handles offsets like +00:00
     dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
     return dt.hour * 100 + dt.minute
+
+def split_hhmm(crs_dep_time: int) -> tuple[int, int]:
+    t = int(crs_dep_time)
+    hours = max(0, min(23, t // 100))
+    mins = max(0, min(59, t % 100))
+    return hours, mins
 
 def fetch_flight_from_aviationstack(marketing_carrier: str,
                                    marketing_flight_number: str,
@@ -229,13 +324,17 @@ def flight_lookup():
     o_weather = fetch_weather(o_lat, o_lon, flight_date, inferred["CRS_DEP_TIME"])
     d_weather = fetch_weather(d_lat, d_lon, flight_date, inferred["CRS_DEP_TIME"])
 
+    crs_dep_time = int(inferred["CRS_DEP_TIME"])
+    crs_dep_hours, crs_dep_mins = split_hhmm(crs_dep_time)
+
     # set up params for model inference (match your training column names)
     params = {
         "OP_CARRIER": inferred["OP_CARRIER"],
         "OP_CARRIER_FL_NUM": inferred["OP_CARRIER_FL_NUM"],
         "ORIGIN_INDEX": origin_index,
         "DEST_INDEX": dest_index,
-        "CRS_DEP_TIME": int(inferred["CRS_DEP_TIME"]),
+        "CRS_DEP_HOURS": crs_dep_hours,
+        "CRS_DEP_MINS": crs_dep_mins,
         "DAY_OF_MONTH": int(dt.day),
         "DAY_OF_WEEK": int(dt.isoweekday()), 
         "MONTH": int(dt.month),
@@ -260,7 +359,7 @@ def flight_lookup():
         "OP_CARRIER_FL_NUM",
         "ORIGIN_INDEX",
         "DEST_INDEX",
-        "CRS_DEP_TIME",
+        "CRS_DEP_HOURS",
         "DAY_OF_MONTH",
         "DAY_OF_WEEK",
         "MONTH",
@@ -275,20 +374,21 @@ def flight_lookup():
         "O_LONGITUDE",
         "D_LATITUDE",
         "D_LONGITUDE",
+        "CRS_DEP_MINS",
     ]
     params = {k: params[k] for k in FEATURE_ORDER}
 
-    return jsonify(params), 200
+    # return jsonify(params), 200
 
-    '''
+    
     # infer delay prediction from model
-    prediction = model.predict(params)
+    prediction = predict_one(model, params, device)
 
     return jsonify({
         "message": "Flight feature payload received",
         "prediction": prediction
     }), 200
-    '''
+    
 
 
 @app.route("/health", methods=["GET"])
